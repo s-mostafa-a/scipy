@@ -112,6 +112,7 @@ Icon?
 Thumbs.db
 *.dSYM
 venv/
+venv3.6/
 
 # Documentation generated files #
 #################################
