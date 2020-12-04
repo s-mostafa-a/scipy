@@ -1,6 +1,6 @@
 import warnings
 from . import _minpack
-
+from jax import numpy as jnp
 import numpy as np
 from numpy import (atleast_1d, dot, take, triu, shape, eye,
                    transpose, zeros, prod, greater,
@@ -270,6 +270,121 @@ def _root_hybr(func, x0, args=(), jac=None,
         sol['message'] = errors['unknown']
 
     return sol
+
+
+def fsolve_jax(func, x0, args=(), fprime=None, full_output=0,
+               col_deriv=0, xtol=1.49012e-8, maxfev=0, band=None,
+               epsfcn=None, factor=100, diag=None):
+    options = {'col_deriv': col_deriv,
+               'xtol': xtol,
+               'maxfev': maxfev,
+               'band': band,
+               'eps': epsfcn,
+               'factor': factor,
+               'diag': diag}
+
+    res = _root_hybr_jax(func, x0, args, jac=fprime, **options)
+    if full_output:
+        x = res['x']
+        info = dict((k, res.get(k))
+                    for k in ('nfev', 'njev', 'fjac', 'r', 'qtf') if k in res)
+        info['fvec'] = res['fun']
+        return x, info, res['status'], res['message']
+    else:
+        status = res['status']
+        msg = res['message']
+        if status == 0:
+            raise TypeError(msg)
+        elif status == 1:
+            pass
+        elif status in [2, 3, 4, 5]:
+            warnings.warn(msg, RuntimeWarning)
+        else:
+            raise TypeError(msg)
+        return res['x']
+
+
+def _root_hybr_jax(func, x0, args=(), jac=None,
+               col_deriv=0, xtol=1.49012e-08, maxfev=0, band=None, eps=None,
+               factor=100, diag=None, **unknown_options):
+    _check_unknown_options(unknown_options)
+    epsfcn = eps
+
+    x0 = jnp.asarray(x0).flatten()
+    n = len(x0)
+    if not isinstance(args, tuple):
+        args = (args,)
+    shape, dtype = _check_func_jax('fsolve', 'func', func, x0, args, n, (n,))
+    if epsfcn is None:
+        epsfcn = jnp.finfo(dtype).eps
+    Dfun = jac
+    if Dfun is None:
+        if band is None:
+            ml, mu = -10, -10
+        else:
+            ml, mu = band[:2]
+        if maxfev == 0:
+            maxfev = 200 * (n + 1)
+        retval = _minpack._hybrd(func, x0, args, 1, xtol, maxfev,
+                                 ml, mu, epsfcn, factor, diag)
+    else:
+        _check_func_jax('fsolve', 'fprime', Dfun, x0, args, n, (n, n))
+        if (maxfev == 0):
+            maxfev = 100 * (n + 1)
+        retval = _minpack._hybrj(func, Dfun, x0, args, 1,
+                                 col_deriv, xtol, maxfev, factor, diag)
+
+    x, status = retval[0], retval[-1]
+
+    errors = {0: "Improper input parameters were entered.",
+              1: "The solution converged.",
+              2: "The number of calls to function has "
+                  "reached maxfev = %d." % maxfev,
+              3: "xtol=%f is too small, no further improvement "
+                  "in the approximate\n  solution "
+                  "is possible." % xtol,
+              4: "The iteration is not making good progress, as measured "
+                  "by the \n  improvement from the last five "
+                  "Jacobian evaluations.",
+              5: "The iteration is not making good progress, "
+                  "as measured by the \n  improvement from the last "
+                  "ten iterations.",
+              'unknown': "An error occurred."}
+
+    info = retval[1]
+    info['fun'] = info.pop('fvec')
+    sol = OptimizeResult(x=x, success=(status == 1), status=status)
+    sol.update(info)
+    try:
+        sol['message'] = errors[status]
+    except KeyError:
+        sol['message'] = errors['unknown']
+
+    return sol
+
+
+def _check_func_jax(checker, argname, thefunc, x0, args, numinputs,
+                output_shape=None):
+    res = jnp.atleast_1d(thefunc(*((x0[:numinputs],) + args)))
+    if (output_shape is not None) and (jnp.shape(res) != output_shape):
+        if (output_shape[0] != 1):
+            if len(output_shape) > 1:
+                if output_shape[1] == 1:
+                    return jnp.shape(res)
+            msg = "%s: there is a mismatch between the input and output " \
+                  "shape of the '%s' argument" % (checker, argname)
+            func_name = getattr(thefunc, '__name__', None)
+            if func_name:
+                msg += " '%s'." % func_name
+            else:
+                msg += "."
+            msg += 'Shape should be %s but it is %s.' % (output_shape, shape(res))
+            raise TypeError(msg)
+    if jnp.issubdtype(res.dtype, jnp.inexact):
+        dt = res.dtype
+    else:
+        dt = jnp.dtype(float)
+    return jnp.shape(res), dt
 
 
 LEASTSQ_SUCCESS = [1, 2, 3, 4]
