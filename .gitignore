@@ -111,6 +111,7 @@ ehthumbs.db
 Icon?
 Thumbs.db
 *.dSYM
+venv/
 
 # Documentation generated files #
 #################################
